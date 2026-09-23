@@ -14,6 +14,9 @@ export class Input {
 
   constructor(private canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (e) => {
+      // Typing in a text field (seed, search boxes) is not game input.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && e.code !== 'Escape') return;
       if (e.code === 'Tab' || e.code === 'F3' || e.code === 'F1' || e.code === 'F2' || (e.code === 'Space' && this.locked)) e.preventDefault();
       if (!this.keys.has(e.code)) this.pressed.add(e.code);
       this.keys.add(e.code);

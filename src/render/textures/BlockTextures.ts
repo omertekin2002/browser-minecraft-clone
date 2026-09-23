@@ -1,5 +1,6 @@
-import { TEXTURE_NAMES, TextureName } from '../../world/textureNames';
+import { TEXTURE_NAMES, TextureName, COLORS } from '../../world/textureNames';
 import { mulberry32 } from '../../world/gen/noise';
+import { ITEM_GENERATORS, DYE_RGB } from './ItemTextures';
 
 /**
  * Procedural 16×16 pixel-art block textures with PBR data:
@@ -947,6 +948,432 @@ const GENERATORS: Partial<Record<TextureName, Gen>> = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Blocks added with crafting
+// ---------------------------------------------------------------------------
+
+const CHEST_WOOD = pal(0x8a5a26, 0x9a6830, 0xa8753a, 0xb58243, 0xc0904e);
+const CHEST_DARK = hex(0x3b230c);
+
+function chestBase(t: TexData, rng: () => number) {
+  planks(t, rng, CHEST_WOOD, hex(0x5e3a16));
+  border(t, CHEST_DARK, 0.25);
+}
+
+/** Stone-like noise used by granite, diorite, andesite. */
+function speckled(t: TexData, rng: () => number, p: RGB[], speck: RGB[], amount: number) {
+  const n = fbm(rng, 3, 2);
+  forEach((x, y) => {
+    let v = n(x, y) * 0.6 + rng() * 0.4;
+    let c = pick(p, v);
+    if (rng() < amount) { c = pick(speck, rng()); v = 0.9; }
+    t.set(x, y, c, 0);
+    t.h(x, y, 0.35 + v * 0.45);
+  });
+  t.fillMat(0.16, 0.04);
+  t.normalStrength = 1.1;
+}
+
+function polished(t: TexData, rng: () => number, p: RGB[], edge: RGB) {
+  forEach((x, y) => {
+    let v = 0.45 + rng() * 0.25;
+    if (x === 1 || y === 1) v += 0.2;
+    if (x === 14 || y === 14) v -= 0.15;
+    t.set(x, y, pick(p, v), 0);
+    t.h(x, y, 0.7);
+  });
+  border(t, edge, 0.3);
+  t.fillMat(0.45, 0.04);
+  t.normalStrength = 1.2;
+}
+
+/** Solid-colour block with a little variation (concrete, terracotta). */
+function flatColor(t: TexData, rng: () => number, base: RGB, noise: number, smooth: number) {
+  const n = fbm(rng, 2, 2);
+  forEach((x, y) => {
+    const v = 1 + (n(x, y) - 0.5) * noise + (rng() - 0.5) * noise * 0.6;
+    t.set(x, y, shade(base, v), 0);
+    t.h(x, y, 0.5 + (v - 1) * 2);
+  });
+  t.fillMat(smooth, 0.04);
+  t.normalStrength = 0.5;
+}
+
+function crop(t: TexData, rng: () => number, age: number) {
+  plantBase(t);
+  const h = 3 + Math.round(age * 1.75);
+  const ripe = age === 7;
+  const stalks = [2, 5, 8, 11, 13];
+  for (const sx of stalks) {
+    const hh = Math.max(2, h - Math.floor(rng() * 3));
+    let x = sx;
+    for (let i = 0; i < hh; i++) {
+      const y = 15 - i;
+      const green = pick(pal(0x2f7a1c, 0x3f8f24, 0x55a52e, 0x6cbb3a), 0.3 + (i / hh) * 0.6);
+      const gold = pick(pal(0x9a7a1e, 0xb8942a, 0xd2ae3c, 0xe6c85a), 0.3 + (i / hh) * 0.6);
+      const c = ripe ? gold : age >= 5 && i > hh - 3 ? mixc(green, hex(0xa8b848), 0.5) : green;
+      t.set(x, y, c);
+      t.h(x, y, 0.5 + i * 0.03);
+      if (rng() < 0.25 && i > 1) x += rng() < 0.5 ? -1 : 1;
+      x = Math.max(0, Math.min(15, x));
+    }
+    if (age >= 4) {
+      // Grain heads.
+      const top = 15 - hh + 1;
+      const head = ripe ? pal(0xc89a2c, 0xe0b848, 0xf2d06a) : pal(0x6a9a2a, 0x88b03a, 0xa0c24a);
+      for (let k = 0; k < Math.min(4, age - 2); k++) {
+        t.set(x + (k % 2 ? 1 : -1) * (k > 1 ? 1 : 0), top + k, pick(head, rng()));
+        t.h(x, top + k, 0.8);
+      }
+    }
+  }
+  t.fillMat(0.2, 0.04, 0.7);
+}
+
+function sapling(t: TexData, rng: () => number, leaf: RGB[], stemC: RGB, conical: boolean) {
+  plantBase(t);
+  for (let y = 9; y < 16; y++) { t.set(7, y, shade(stemC, 0.9 + (y % 2) * 0.1)); t.h(7, y, 0.6); }
+  t.set(8, 12, stemC);
+  for (let y = 1; y <= 11; y++) {
+    const w = conical ? Math.floor((y - 1) * 0.55) + 1 : Math.round(Math.sqrt(Math.max(0, 25 - (y - 5.5) ** 2 * 1.6)));
+    if (w <= 0) continue;
+    for (let x = 7 - w; x <= 7 + w; x++) {
+      if (rng() < (conical ? 0.12 : 0.22)) continue;
+      if (conical && y > 10) continue;
+      t.set(x, y, pick(leaf, rng()));
+      t.h(x, y, 0.5 + rng() * 0.4);
+    }
+  }
+  t.fillMat(0.2, 0.04, 0.75);
+}
+
+const BLOCK_GENERATORS_2: Partial<Record<TextureName, Gen>> = {
+  chest_top: (t, rng) => {
+    chestBase(t, rng);
+    for (let x = 1; x < 15; x++) { t.set(x, 1, shade(t.get(x, 1), 1.1)); }
+  },
+  chest_side: (t, rng) => {
+    chestBase(t, rng);
+    for (let x = 1; x < 15; x++) { t.set(x, 5, CHEST_DARK); t.h(x, 5, 0.15); t.set(x, 6, shade(t.get(x, 6), 0.8)); }
+  },
+  chest_front: (t, rng) => {
+    GENERATORS.chest_side!(t, rng);
+    const metal = pal(0x8c8c8c, 0xb4b4b4, 0xd8d8d8);
+    for (let y = 3; y <= 7; y++) for (let x = 6; x <= 9; x++) {
+      const edge = y === 3 || y === 7 || x === 6 || x === 9;
+      t.set(x, y, edge ? hex(0x2a2a2a) : pick(metal, 1 - (y - 4) / 3), 0);
+      t.h(x, y, edge ? 0.7 : 0.9);
+      t.mat(x, y, 0.65, edge ? 0.04 : 1.0);
+    }
+  },
+  furnace_front_on: (t, rng) => {
+    GENERATORS.furnace_front!(t, rng);
+    const fire = pal(0x8a1e06, 0xc8400a, 0xf07818, 0xffb040, 0xffe890);
+    for (let y = 9; y <= 13; y++) for (let x = 5; x <= 10; x++) {
+      const v = (y - 9) / 4 * 0.6 + rng() * 0.45;
+      t.set(x, y, pick(fire, v), 0);
+      t.h(x, y, 0.1);
+      t.mat(x, y, 0.2, 0.04, 0, 0.6 + v * 0.4);
+    }
+  },
+  coal_block: (t, rng) => {
+    const n = fbm(rng, 3, 2);
+    forEach((x, y) => {
+      const v = n(x, y) * 0.6 + rng() * 0.4;
+      t.set(x, y, pick(pal(0x0e0e0e, 0x161616, 0x1e1e1e, 0x282828, 0x333333), v), 0);
+      t.h(x, y, 0.4 + v * 0.4);
+    });
+    border(t, hex(0x080808), 0.3);
+    t.fillMat(0.45, 0.04);
+    t.normalStrength = 1.3;
+  },
+  lapis_block: (t, rng) => {
+    const n = fbm(rng, 3, 2);
+    forEach((x, y) => {
+      const v = n(x, y) * 0.5 + rng() * 0.5;
+      let c = pick(pal(0x1a3a8e, 0x2046a8, 0x2653c0, 0x2e60d0), v);
+      if (rng() < 0.08) c = pick(pal(0x5a88e8, 0x8ab0f5, 0xd8c060), rng());
+      t.set(x, y, c, 0);
+      t.h(x, y, 0.5 + v * 0.3);
+    });
+    border(t, hex(0x142c70), 0.3);
+    t.fillMat(0.55, 0.05);
+  },
+  redstone_block: (t, rng) => {
+    forEach((x, y) => {
+      const cell = (x % 4 === 1 || x % 4 === 2) && (y % 4 === 1 || y % 4 === 2);
+      const v = (cell ? 0.75 : 0.35) + rng() * 0.2;
+      t.set(x, y, pick(pal(0x7a0a04, 0x9c1208, 0xbe1c0e, 0xdc2a14, 0xf0503a), v), 0);
+      t.h(x, y, cell ? 0.8 : 0.45);
+      t.mat(x, y, 0.5, 0.05, 0, cell ? 0.25 : 0.05);
+    });
+    border(t, hex(0x5a0604), 0.3);
+  },
+  smooth_stone: (t, rng) => {
+    forEach((x, y) => {
+      t.set(x, y, pick(pal(0x9a9a9a, 0xa2a2a2, 0xaaaaaa, 0xb0b0b0), 0.35 + rng() * 0.45), 0);
+      t.h(x, y, 0.65);
+    });
+    border(t, hex(0x8a8a8a), 0.45);
+    t.fillMat(0.28, 0.04);
+    t.normalStrength = 0.8;
+  },
+  smooth_stone_slab_side: (t, rng) => {
+    GENERATORS.smooth_stone!(t, rng);
+    for (let x = 0; x < 16; x++) { t.set(x, 7, hex(0x8a8a8a)); t.set(x, 8, hex(0x8a8a8a)); t.h(x, 7, 0.45); t.h(x, 8, 0.45); }
+  },
+  mossy_stone_bricks: (t, rng) => {
+    GENERATORS.stone_bricks!(t, rng);
+    const n = fbm(rng, 2, 2);
+    forEach((x, y) => {
+      if (n(x, y) > 0.52 || (t.hGet(x, y) < 0.1 && rng() < 0.5)) {
+        t.set(x, y, pick(pal(0x3e5a20, 0x4b6c2a, 0x587a31, 0x668a3a), rng()));
+        t.mat(x, y, 0.08, 0.04, 0.3);
+      }
+    });
+  },
+  cracked_stone_bricks: (t, rng) => {
+    GENERATORS.stone_bricks!(t, rng);
+    for (let k = 0; k < 4; k++) {
+      let x = rng() * 16, y = rng() * 16;
+      let a = rng() * Math.PI * 2;
+      for (let i = 0; i < 7; i++) {
+        t.set(Math.floor(x), Math.floor(y), hex(0x3a3a3a));
+        t.h(Math.floor(x), Math.floor(y), 0.08);
+        a += (rng() - 0.5) * 1.3;
+        x += Math.cos(a); y += Math.sin(a);
+      }
+    }
+  },
+  chiseled_stone_bricks: (t, rng) => {
+    forEach((x, y) => {
+      const r = Math.max(Math.abs(x - 7.5), Math.abs(y - 7.5));
+      const d = Math.hypot(x - 7.5, y - 7.5);
+      let v = 0.5 + rng() * 0.2;
+      let h = 0.7;
+      if (r > 6.5) { v = 0.62 + rng() * 0.15; h = 0.8; }
+      else if (r > 5.5) { v = 0.15; h = 0.2; }
+      else if (d < 2.4) { v = 0.75; h = 0.85; }
+      else if (d < 3.3) { v = 0.2; h = 0.25; }
+      t.set(x, y, pick(STONE_PAL, v), 0);
+      t.h(x, y, h);
+    });
+    border(t, hex(0x4a4a4a), 0.1);
+    t.fillMat(0.15, 0.04);
+    t.normalStrength = 1.6;
+  },
+  cut_sandstone: (t, rng) => {
+    const p = pal(0xd0bf86, 0xd8c890, 0xe0d19b, 0xe6d8a4);
+    forEach((x, y) => {
+      let v = 0.4 + rng() * 0.3;
+      let h = 0.65;
+      if (y <= 1 || y >= 14) { v += 0.15; h = 0.75; }
+      if (y === 2 || y === 13) { v = 0.05; h = 0.3; }
+      t.set(x, y, pick(p, v), 0);
+      t.h(x, y, h);
+    });
+    t.fillMat(0.12, 0.04);
+    t.normalStrength = 1.2;
+  },
+  chiseled_sandstone: (t, rng) => {
+    GENERATORS.cut_sandstone!(t, rng);
+    const carve = pal(0xa8945e, 0xb8a46c);
+    const glyph = ['..####..', '.#....#.', '#..##..#', '#.#..#.#', '#..##..#', '.#....#.', '..####..', '...##...', '..#..#..'];
+    glyph.forEach((row, gy) => {
+      for (let gx = 0; gx < 8; gx++) if (row[gx] === '#') { t.set(4 + gx, 3 + gy, pick(carve, rng()), 0); t.h(4 + gx, 3 + gy, 0.3); }
+    });
+  },
+  terracotta: (t, rng) => flatColor(t, rng, hex(0x985e43), 0.12, 0.2),
+  hay_block_side: (t, rng) => {
+    const straw = pal(0x9a7a18, 0xb8941e, 0xcca82a, 0xdcbc3e, 0xe8cc5a);
+    const cols = Array.from({ length: 16 }, () => rng());
+    forEach((x, y) => {
+      const v = cols[x] * 0.6 + rng() * 0.4;
+      t.set(x, y, pick(straw, v), 0);
+      t.h(x, y, 0.45 + v * 0.4);
+    });
+    for (const by of [2, 3, 12, 13]) for (let x = 0; x < 16; x++) {
+      t.set(x, by, pick(pal(0x6a3a14, 0x7a4618, 0x8a521e), rng()), 0);
+      t.h(x, by, 0.8);
+    }
+    t.fillMat(0.1, 0.04, 0.2);
+    t.normalStrength = 1.4;
+  },
+  hay_block_top: (t, rng) => {
+    const straw = pal(0x8a6a14, 0xa8861c, 0xc4a02a, 0xd8b83c);
+    forEach((x, y) => {
+      const d = Math.hypot(x - 7.5, y - 7.5);
+      const ring = Math.floor(d * 0.9 + rng() * 0.5) % 2;
+      const v = ring * 0.4 + rng() * 0.5;
+      t.set(x, y, pick(straw, v), 0);
+      t.h(x, y, 0.4 + v * 0.4);
+    });
+    border(t, hex(0x6a3a14), 0.7);
+    t.fillMat(0.1, 0.04, 0.2);
+    t.normalStrength = 1.5;
+  },
+  farmland: (t, rng) => {
+    const n = fbm(rng, 2, 2);
+    forEach((x, y) => {
+      const furrow = y % 4 === 3;
+      const v = n(x, y) * 0.5 + rng() * 0.5;
+      const c = pick(pal(0x3a2616, 0x44301c, 0x503822, 0x5c4128), furrow ? v * 0.4 : 0.35 + v * 0.65);
+      t.set(x, y, c, 0);
+      t.h(x, y, furrow ? 0.15 : 0.5 + v * 0.3);
+    });
+    t.fillMat(0.18, 0.04);
+    t.normalStrength = 1.4;
+  },
+  oak_sapling: (t, rng) => sapling(t, rng, pal(0x2f6e1a, 0x3f8424, 0x4f9a2e, 0x62ac38), hex(0x5a3e20), false),
+  birch_sapling: (t, rng) => sapling(t, rng, pal(0x4a7a2a, 0x5c8e34, 0x70a040, 0x86b050), hex(0xd8d8cc), false),
+  spruce_sapling: (t, rng) => sapling(t, rng, pal(0x1f4a26, 0x285a2e, 0x326a38, 0x3e7a44), hex(0x4a3420), true),
+  granite: (t, rng) => speckled(t, rng, pal(0x8a5a48, 0x966452, 0xa06e5a, 0xaa7864, 0xb48470), pal(0xc89a88, 0x6a4034, 0xd8b0a0), 0.12),
+  polished_granite: (t, rng) => polished(t, rng, pal(0x8e5c4a, 0x9a6654, 0xa6725e, 0xb07c68), hex(0x6e4636)),
+  diorite: (t, rng) => speckled(t, rng, pal(0xb4b4b0, 0xbebebb, 0xc8c8c5, 0xd2d2cf, 0xdcdcda), pal(0x7a7a78, 0x929290, 0xefefed), 0.16),
+  polished_diorite: (t, rng) => polished(t, rng, pal(0xbcbcb8, 0xc6c6c3, 0xd0d0cd, 0xdadad8), hex(0x9a9a98)),
+  andesite: (t, rng) => speckled(t, rng, pal(0x76767a, 0x808084, 0x8a8a8e, 0x949498, 0x9e9ea2), pal(0x5a5a5e, 0xb0b0b4), 0.12),
+  polished_andesite: (t, rng) => polished(t, rng, pal(0x7c7c80, 0x86868a, 0x909094, 0x9a9a9e), hex(0x606064)),
+  lantern: (t, rng) => {
+    // Box faces sample columns 5..10 and rows 7..15 (see the lantern's box in blocks.ts).
+    t.cutout = true;
+    forEach((x, y) => t.set(x, y, [0, 0, 0], 0));
+    const frame = pal(0x2a2a30, 0x3a3a44, 0x4a4a56);
+    const glow = pal(0xff9a2a, 0xffb640, 0xffd070, 0xfff0b0);
+    for (let y = 7; y < 16; y++) for (let x = 5; x < 11; x++) {
+      const edge = x === 5 || x === 10 || y === 7 || y === 8 || y === 15;
+      if (edge) { t.set(x, y, pick(frame, rng())); t.h(x, y, 0.8); t.mat(x, y, 0.55, 1.0); }
+      else {
+        const v = 1 - Math.abs(x - 7.5) / 3 - Math.abs(y - 11.5) / 8 + rng() * 0.15;
+        t.set(x, y, pick(glow, v)); t.h(x, y, 0.5); t.mat(x, y, 0.3, 0.04, 0, 0.75 + v * 0.25);
+      }
+    }
+  },
+  lantern_top: (t, rng) => {
+    t.cutout = true;
+    forEach((x, y) => t.set(x, y, [0, 0, 0], 0));
+    for (let y = 5; y < 11; y++) for (let x = 5; x < 11; x++) {
+      const inner = x > 6 && x < 9 && y > 6 && y < 9;
+      t.set(x, y, inner ? hex(0x14141a) : pick(pal(0x2a2a30, 0x3a3a44, 0x4a4a56), rng()));
+      t.h(x, y, inner ? 0.2 : 0.8);
+      t.mat(x, y, 0.55, inner ? 0.04 : 1.0);
+    }
+  },
+  cobweb: (t, rng) => {
+    plantBase(t);
+    const c: RGB = [236, 236, 240];
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2 + 0.2;
+      for (let r = 0; r < 11; r += 0.5) {
+        const x = Math.round(7.5 + Math.cos(a) * r), y = Math.round(7.5 + Math.sin(a) * r);
+        if (x >= 0 && x < 16 && y >= 0 && y < 16) t.set(x, y, c, 255);
+      }
+    }
+    for (const rr of [2.5, 4.8, 7]) {
+      for (let k = 0; k < 64; k++) {
+        const a = (k / 64) * Math.PI * 2;
+        const wob = rr * (0.85 + 0.15 * Math.cos(a * 8));
+        const x = Math.round(7.5 + Math.cos(a) * wob), y = Math.round(7.5 + Math.sin(a) * wob);
+        if (rng() < 0.85) t.set(x, y, c, 255);
+      }
+    }
+    t.fillMat(0.3, 0.04, 0.4);
+  },
+  barrel_side: (t, rng) => {
+    const wood = pal(0x5a3c1e, 0x664424, 0x724c2a, 0x7e5530, 0x8a5e36);
+    forEach((x, y) => {
+      const stave = Math.floor(x / 4);
+      const seam = x % 4 === 3;
+      const v = ((stave * 0.37) % 1) * 0.4 + rng() * 0.4 + 0.1;
+      t.set(x, y, seam ? hex(0x3a2412) : pick(wood, v), 0);
+      t.h(x, y, seam ? 0.2 : 0.65);
+    });
+    for (const by of [1, 2, 13, 14]) for (let x = 0; x < 16; x++) {
+      t.set(x, by, pick(pal(0x3a3a3e, 0x4a4a50, 0x5a5a62), by === 1 || by === 13 ? 0.9 : 0.3), 0);
+      t.h(x, by, 0.85);
+      t.mat(x, by, 0.5, 1.0);
+    }
+    t.fillMat(0.2, 0.04);
+    for (const by of [1, 2, 13, 14]) for (let x = 0; x < 16; x++) t.mat(x, by, 0.5, 1.0);
+    t.normalStrength = 1.4;
+  },
+  barrel_top: (t, rng) => {
+    planks(t, rng, pal(0x6a4828, 0x76522e, 0x825c34, 0x8e663a), hex(0x3e2814));
+    border(t, hex(0x3a3a3e), 0.8);
+    for (let i = 1; i < 15; i++) { t.set(i, 1, hex(0x4a4a50)); t.set(i, 14, hex(0x4a4a50)); t.set(1, i, hex(0x4a4a50)); t.set(14, i, hex(0x4a4a50)); }
+    for (let y = 6; y <= 9; y++) for (let x = 6; x <= 9; x++) { t.set(x, y, hex(0x2a1a0c)); t.h(x, y, 0.1); }
+  },
+  barrel_bottom: (t, rng) => {
+    planks(t, rng, pal(0x6a4828, 0x76522e, 0x825c34, 0x8e663a), hex(0x3e2814));
+    border(t, hex(0x3a3a3e), 0.8);
+  },
+  bone_block_side: (t, rng) => {
+    forEach((x, y) => {
+      const groove = x % 5 === 2;
+      const v = (groove ? 0.2 : 0.55) + rng() * 0.3;
+      t.set(x, y, pick(pal(0xc8c2a8, 0xd6d0b8, 0xe2dcc6, 0xece8d6), v), 0);
+      t.h(x, y, groove ? 0.3 : 0.7);
+    });
+    t.fillMat(0.3, 0.04);
+  },
+  bone_block_top: (t, rng) => {
+    forEach((x, y) => {
+      const d = Math.hypot(x - 7.5, y - 7.5);
+      const ring = d > 5.5 && d < 6.8;
+      const v = (ring ? 0.2 : d < 2 ? 0.35 : 0.65) + rng() * 0.25;
+      t.set(x, y, pick(pal(0xc8c2a8, 0xd6d0b8, 0xe2dcc6, 0xece8d6), v), 0);
+      t.h(x, y, ring ? 0.3 : 0.7);
+    });
+    t.fillMat(0.3, 0.04);
+  },
+  light_gray_wool: (t, rng) => wool(t, rng, hex(0x8e8e86)),
+  gray_wool: (t, rng) => wool(t, rng, hex(0x3e4447)),
+  brown_wool: (t, rng) => wool(t, rng, hex(0x724728)),
+  green_wool: (t, rng) => wool(t, rng, hex(0x546d1b)),
+  cyan_wool: (t, rng) => wool(t, rng, hex(0x158991)),
+  magenta_wool: (t, rng) => wool(t, rng, hex(0xbd44b3)),
+  pink_wool: (t, rng) => wool(t, rng, hex(0xed8dac)),
+};
+Object.assign(GENERATORS, BLOCK_GENERATORS_2);
+for (let age = 0; age < 8; age++) GENERATORS[`wheat_${age}` as TextureName] = (t, rng) => crop(t, rng, age);
+
+const TERRACOTTA_RGB: Record<string, number> = {
+  white: 0xd1b1a1, orange: 0xa15325, magenta: 0x95576c, light_blue: 0x706c8a, yellow: 0xba8523, lime: 0x677534,
+  pink: 0xa04d4e, gray: 0x392a23, light_gray: 0x876a61, cyan: 0x575b5b, purple: 0x764656, blue: 0x4a3b5b,
+  brown: 0x4d3323, green: 0x4c532a, red: 0x8e3c2e, black: 0x251610,
+};
+const CONCRETE_RGB: Record<string, number> = {
+  white: 0xcfd5d6, orange: 0xe06100, magenta: 0xa9309f, light_blue: 0x2389c6, yellow: 0xf0af15, lime: 0x5ea818,
+  pink: 0xd5658e, gray: 0x36393d, light_gray: 0x7d7d73, cyan: 0x157788, purple: 0x64209c, blue: 0x2c2e8f,
+  brown: 0x603b1f, green: 0x495b24, red: 0x8e2020, black: 0x080a0f,
+};
+for (const c of COLORS) {
+  const glassRGB = hex(DYE_RGB[c]);
+  GENERATORS[`${c}_stained_glass`] = (t, rng) => {
+    forEach((x, y) => {
+      const edge = x === 0 || y === 0 || x === 15 || y === 15;
+      const streak = (x + y === 5 || x + y === 6 || x + y === 20) && !edge;
+      const col = edge ? shade(glassRGB, 0.72) : streak ? mixc(glassRGB, [255, 255, 255], 0.35) : shade(glassRGB, 0.95 + rng() * 0.1);
+      t.set(x, y, col, edge ? 225 : streak ? 185 : 150);
+      t.h(x, y, edge ? 0.6 : 0.8);
+    });
+    t.fillMat(0.95, 0.04);
+    t.normalStrength = 0.4;
+  };
+  GENERATORS[`${c}_terracotta`] = (t, rng) => flatColor(t, rng, hex(TERRACOTTA_RGB[c]), 0.12, 0.2);
+  GENERATORS[`${c}_concrete`] = (t, rng) => flatColor(t, rng, hex(CONCRETE_RGB[c]), 0.05, 0.3);
+  GENERATORS[`${c}_concrete_powder`] = (t, rng) => {
+    const base = mixc(hex(CONCRETE_RGB[c]), [235, 235, 235], 0.18);
+    const n = fbm(rng, 2, 4);
+    forEach((x, y) => {
+      const v = n(x, y) * 0.4 + rng() * 0.6;
+      t.set(x, y, shade(base, 0.82 + v * 0.3), 0);
+      t.h(x, y, 0.4 + v * 0.3);
+    });
+    t.fillMat(0.08, 0.04);
+    t.normalStrength = 0.9;
+  };
+}
+
 function destroyStage(t: TexData, stage: number) {
   const rng = mulberry32(12345);
   t.cutout = true;
@@ -1090,36 +1517,47 @@ export function buildTextures(): TextureSet {
     const rng = mulberry32(hashStr(name));
     if (name.startsWith('destroy_')) destroyStage(t, parseInt(name.slice(8), 10));
     else {
-      const gen = GENERATORS[name];
+      const gen = GENERATORS[name] ?? ITEM_GENERATORS[name];
       if (gen) gen(t, rng);
       else forEach((x, y) => t.set(x, y, (x + y) % 2 ? [255, 0, 255] : [0, 0, 0], 0));
     }
     byName.set(name, t);
     cutoutFlags.push(t.cutout);
 
-    let a: Uint8Array = new Uint8Array(t.rgba);
-    let n: Uint8Array = buildNormal(t);
-    let s: Uint8Array = buildSpecular(t);
-    // Base coverage for cutouts.
-    let baseCoverage = 0;
-    if (t.cutout) {
-      for (let i = 0; i < N; i++) if (a[i * 4 + 3] >= 128) baseCoverage++;
-      baseCoverage /= N;
-    }
+    const mips = layerMips(t);
     for (let l = 0; l < levels; l++) {
-      const size = TEX >> l;
-      const stride = size * size * 4;
-      albedo[l].set(a, layer * stride);
-      normal[l].set(n, layer * stride);
-      specular[l].set(s, layer * stride);
-      if (l + 1 < levels) {
-        a = downsample(a, size, 'albedo', t.cutout);
-        if (t.cutout) preserveCoverage(a, baseCoverage);
-        n = downsample(n, size, 'normal', t.cutout);
-        s = downsample(s, size, 'linear', t.cutout);
-      }
+      const stride = (TEX >> l) * (TEX >> l) * 4;
+      albedo[l].set(mips.albedo[l], layer * stride);
+      normal[l].set(mips.normal[l], layer * stride);
+      specular[l].set(mips.specular[l], layer * stride);
     }
   });
 
   return { count, levels, albedo, normal, specular, byName, cutout: cutoutFlags };
+}
+
+/** Albedo / normal / specular data of one texture for every mip level. */
+export function layerMips(t: TexData): { albedo: Uint8Array[]; normal: Uint8Array[]; specular: Uint8Array[] } {
+  const levels = Math.log2(TEX) + 1;
+  const out = { albedo: [] as Uint8Array[], normal: [] as Uint8Array[], specular: [] as Uint8Array[] };
+  let a: Uint8Array = new Uint8Array(t.rgba);
+  let n: Uint8Array = buildNormal(t);
+  let s: Uint8Array = buildSpecular(t);
+  // Base coverage for cutouts.
+  let baseCoverage = 0;
+  if (t.cutout) {
+    for (let i = 0; i < N; i++) if (a[i * 4 + 3] >= 128) baseCoverage++;
+    baseCoverage /= N;
+  }
+  for (let l = 0; l < levels; l++) {
+    const size = TEX >> l;
+    out.albedo.push(a); out.normal.push(n); out.specular.push(s);
+    if (l + 1 < levels) {
+      a = downsample(a, size, 'albedo', t.cutout);
+      if (t.cutout) preserveCoverage(a, baseCoverage);
+      n = downsample(n, size, 'normal', t.cutout);
+      s = downsample(s, size, 'linear', t.cutout);
+    }
+  }
+  return out;
 }

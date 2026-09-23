@@ -216,6 +216,121 @@ export class Audio {
     src.start(t, 0, 4.6);
   }
 
+  /** Short rising blip for picking up an item. */
+  pop() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    const f0 = 500 + Math.random() * 350;
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(f0 * 2.1, t + 0.07);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.09, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+    o.connect(g).connect(this.master);
+    o.start(t);
+    o.stop(t + 0.1);
+  }
+
+  /** One bite. */
+  eat() {
+    this.burst({ type: 'bandpass', freq: 1100, q: 0.8, decay: 0.07, gain: 1 }, 0.35, 0.08, 0.8 + Math.random() * 0.4);
+  }
+
+  burp() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(130, t);
+    o.frequency.linearRampToValueAtTime(95, t + 0.28);
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = 600;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.12, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+    o.connect(f).connect(g).connect(this.master);
+    o.start(t);
+    o.stop(t + 0.32);
+  }
+
+  /** Player hurt: a short low grunt. */
+  hurt() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(260, t);
+    o.frequency.exponentialRampToValueAtTime(120, t + 0.16);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.25, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    o.connect(g).connect(this.master);
+    o.start(t);
+    o.stop(t + 0.22);
+    this.burst({ type: 'lowpass', freq: 700, q: 0.7, decay: 0.1, gain: 1 }, 0.25, 0.12, 1);
+  }
+
+  /** A tool snapping. */
+  toolBreak() {
+    this.burst(MATS.glass, 0.5, 0.25, 0.9);
+    this.burst(MATS.metal, 0.35, 0.3, 0.7);
+  }
+
+  /** Chest / barrel lid. */
+  chest(open: boolean) {
+    this.burst(MATS.wood, 0.5, 0.18, open ? 0.75 : 0.6);
+    const ctx = this.ctx;
+    if (!ctx) return;
+    window.setTimeout(() => this.burst(MATS.wood, 0.3, 0.12, open ? 0.95 : 0.7), 70);
+  }
+
+  /** An explosion; distance 0 (on top of it) .. 1 (far away). */
+  explode(distance: number) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    src.playbackRate.value = 0.5;
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(2200 - distance * 1400, t);
+    f.frequency.exponentialRampToValueAtTime(90, t + 1.6);
+    const g = ctx.createGain();
+    const peak = 1.1 * (1 - distance * 0.75);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(peak * 0.3, t + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.2);
+    src.connect(f).connect(g).connect(this.master);
+    src.start(t, 0, 2.3);
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(90, t);
+    o.frequency.exponentialRampToValueAtTime(30, t + 0.5);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(peak * 0.9, t + 0.01);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+    o.connect(og).connect(this.master);
+    o.start(t);
+    o.stop(t + 0.65);
+  }
+
+  /** Lava hitting water, or something catching fire. */
+  fizz() {
+    this.burst({ type: 'highpass', freq: 2500, q: 0.5, decay: 0.3, gain: 0.8 }, 0.4, 0.45, 1);
+  }
+
   splash() {
     this.burst({ type: 'lowpass', freq: 1500, q: 0.7, decay: 0.5, gain: 1 }, 0.35, 0.6, 1);
   }

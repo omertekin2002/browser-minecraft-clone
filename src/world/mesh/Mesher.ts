@@ -34,7 +34,10 @@ export const FLAG_WAVE_PLANT = 2;
 export const FLAG_FLIP = 1 << 5;
 export const FLAG_UP_NORMAL = 1 << 6;
 
-const { IS_OPAQUE, LIGHT_OPACITY, EMISSION, SHAPE, LAYER: BLOCK_LAYER, FACE_TEX, TINT, WAVING, CULL_SAME, UP_NORMAL, IS_LIQUID } = B;
+const {
+  IS_OPAQUE, LIGHT_OPACITY, EMISSION, SHAPE, LAYER: BLOCK_LAYER, FACE_TEX, TINT, WAVING, CULL_SAME, UP_NORMAL, IS_LIQUID,
+  NEIGHBOR_LIGHT, BOX,
+} = B;
 
 class QuadList {
   data: Uint32Array;
@@ -110,6 +113,7 @@ export class Mesher {
     const seeds = this.queue;
     let emitters = 0;
     const emitterList: number[] = [];
+    const neighborLit: number[] = [];
     for (let n = 0; n < 9; n++) {
       const src = chunks[n];
       const xo = 1 + (n % 3) * 16;
@@ -122,6 +126,7 @@ export class Mesher {
             const b = src[s + x];
             region[d + x] = b;
             if (b !== 0 && EMISSION[b] !== 0) emitterList.push(d + x);
+            if (NEIGHBOR_LIGHT[b] !== 0) neighborLit.push(d + x);
           }
         }
       }
@@ -187,6 +192,21 @@ export class Mesher {
       emitters++;
     }
     if (emitters > 0) this.propagate(blk, tail, (H + 1) * LAYER);
+
+    // Slabs block light but are drawn with their neighbours' light (like Minecraft's
+    // "use neighbour brightness"), so faces looking into them aren't black.
+    const limit = (H + 1) * LAYER;
+    for (const i of neighborLit) {
+      let s = 0, l = 0;
+      for (let k = 0; k < 6; k++) {
+        const n = i + OFF[k];
+        if (n < 0 || n >= limit || NEIGHBOR_LIGHT[region[n]] !== 0) continue;
+        if (sky[n] > s) s = sky[n];
+        if (blk[n] > l) l = blk[n];
+      }
+      sky[i] = s;
+      blk[i] = l;
+    }
 
     // --- tints for the centre chunk ---
     const wx0 = cx * 16, wz0 = cz * 16;
@@ -443,7 +463,45 @@ export class Mesher {
     this.pushQuad(list, px, py, pz, f, su, sv, layer, sky4, blk4, ao4, tint, flags);
   }
 
-  /** Non-cube shapes: plants, torches, cactus, liquid sides/bottoms. */
+  /** Whether two BOX blocks have exactly the same box (their touching faces hide each other). */
+  private static sameBox(a: number, b: number): boolean {
+    const oa = a * 6, ob = b * 6;
+    for (let k = 0; k < 6; k++) if (BOX[oa + k] !== BOX[ob + k]) return false;
+    return true;
+  }
+
+  /** Emits the faces of a BOX block (slabs, lanterns). Faces on the cell boundary are culled like cubes. */
+  private boxFaces(list: number, b: number, idx: number, y: number, px: number, py: number, pz: number) {
+    const region = this.region, cr = this.corner;
+    const o = b * 6;
+    const x0 = BOX[o], y0 = BOX[o + 1], z0 = BOX[o + 2], x1 = BOX[o + 3], y1 = BOX[o + 4], z1 = BOX[o + 5];
+    const slab = NEIGHBOR_LIGHT[b] !== 0;
+    for (let f = 0; f < 6; f++) {
+      const boundary = f === 0 ? x1 === 16 : f === 1 ? x0 === 0 : f === 2 ? y1 === 16 : f === 3 ? y0 === 0 : f === 4 ? z1 === 16 : z0 === 0;
+      if (boundary) {
+        if (f === 3 && y === 0) continue;
+        const nb = region[idx + OFF[f]];
+        if (IS_OPAQUE[nb]) continue;
+        if (SHAPE[nb] === Shape.BOX && Mesher.sameBox(b, nb)) continue;
+      }
+      this.faceCorners(idx, f);
+      const sky4 = cr[4] | (cr[5] << 4) | (cr[6] << 8) | (cr[7] << 12);
+      const blk4 = cr[8] | (cr[9] << 4) | (cr[10] << 8) | (cr[11] << 12);
+      const ao4 = boundary || slab ? cr[0] | (cr[1] << 2) | (cr[2] << 4) | (cr[3] << 6) : 0xff;
+      let qx: number, qy: number, qz: number, su: number, sv: number;
+      switch (f) {
+        case 0: qx = x1; qy = y0; qz = z1; su = z1 - z0; sv = y1 - y0; break;
+        case 1: qx = x0; qy = y0; qz = z0; su = z1 - z0; sv = y1 - y0; break;
+        case 2: qx = x0; qy = y1; qz = z1; su = x1 - x0; sv = z1 - z0; break;
+        case 3: qx = x0; qy = y0; qz = z0; su = x1 - x0; sv = z1 - z0; break;
+        case 4: qx = x0; qy = y0; qz = z1; su = x1 - x0; sv = y1 - y0; break;
+        default: qx = x1; qy = y0; qz = z0; su = x1 - x0; sv = y1 - y0; break;
+      }
+      this.pushQuad(list, px + qx, py + qy, pz + qz, f, su, sv, FACE_TEX[b * 6 + f], sky4, blk4, ao4, 0, 0);
+    }
+  }
+
+  /** Non-cube shapes: plants, torches, cactus, boxes, liquid sides/bottoms. */
   private specialShapes(s: number, cx: number, cz: number) {
     const region = this.region, sky = this.sky, blk = this.blk, cr = this.corner;
     for (let y = s * 16; y < s * 16 + 16; y++) {
@@ -478,6 +536,8 @@ export class Mesher {
             this.pushQuad(list, px + 7, py, pz + 9, 4, 2, 10, layer, own4s, own4b, ao4, 0, 0);
             this.pushQuad(list, px + 9, py, pz + 7, 5, 2, 10, layer, own4s, own4b, ao4, 0, 0);
             this.pushQuad(list, px + 7, py + 10, pz + 9, 2, 2, 2, layer, own4s, own4b, ao4, 0, 0);
+          } else if (shape === Shape.BOX) {
+            this.boxFaces(list, b, idx, y, px, py, pz);
           } else if (shape === Shape.CACTUS) {
             const ao4 = 0xff;
             const side = FACE_TEX[b * 6];

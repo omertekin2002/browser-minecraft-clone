@@ -49,7 +49,17 @@ export interface PlayerSave {
   dayCount: number;
   flying: boolean;
   creative: boolean;
-  hotbar: number[];
+  /** Hotbar block ids (the only inventory before items existed; still written for older builds). */
+  hotbar?: number[];
+  inv?: unknown;
+  stats?: unknown;
+  spawn?: [number, number, number];
+}
+
+/** Per-world state that isn't part of chunks: block entities (furnaces, chests) and dropped items. */
+export interface WorldMeta {
+  tiles?: unknown;
+  drops?: unknown;
 }
 
 export class SaveStore {
@@ -106,7 +116,10 @@ export class SaveStore {
     if (!db) return;
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).delete(IDBKeyRange.bound(this.prefix(), this.prefix() + '￿'));
-    try { localStorage.removeItem(`voxelcraft:player:${this.seed}`); } catch { /* ignore */ }
+    try {
+      localStorage.removeItem(`voxelcraft:player:${this.seed}`);
+      localStorage.removeItem(`voxelcraft:world:${this.seed}`);
+    } catch { /* ignore */ }
   }
 
   savePlayer(p: PlayerSave) {
@@ -116,6 +129,19 @@ export class SaveStore {
   loadPlayer(): PlayerSave | null {
     try {
       const raw = localStorage.getItem(`voxelcraft:player:${this.seed}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  saveMeta(m: WorldMeta) {
+    try { localStorage.setItem(`voxelcraft:world:${this.seed}`, JSON.stringify(m)); } catch { /* ignore */ }
+  }
+
+  loadMeta(): WorldMeta | null {
+    try {
+      const raw = localStorage.getItem(`voxelcraft:world:${this.seed}`);
       return raw ? JSON.parse(raw) : null;
     } catch {
       return null;

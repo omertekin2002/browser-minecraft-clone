@@ -1,19 +1,23 @@
-import { BLOCKS } from '../world/blocks';
+import { ITEMS, ItemStack } from '../world/items';
 import type { TextureSet } from '../render/textures/BlockTextures';
-import { blockIcon } from './icons';
+import { itemIcon, setIconTextures } from './icons';
+import { hudIcon } from './hudIcons';
+import { ContainerScreen, ScreenHost } from './ContainerScreen';
 import { GameSettings, PRESETS } from '../game/Settings';
+import type { PlayerStats } from '../game/Survival';
+import { MAX_AIR } from '../game/Survival';
 
-export type ScreenName = 'title' | 'pause' | 'settings' | 'inventory' | null;
+export type ScreenName = 'title' | 'pause' | 'settings' | 'inventory' | 'dead' | null;
 
 export interface UIHandlers {
   play(): void;
   resume(): void;
   settingsChanged(key: keyof GameSettings): void;
   newWorld(seed: string): void;
-  pickInventory(id: number): void;
   toggleMode(): void;
   setTime(dayTime: number): void;
   quitToTitle(): void;
+  respawn(): void;
 }
 
 type SettingDef =
@@ -31,6 +35,7 @@ const SETTINGS: SettingDef[] = [
   { key: 'clouds', label: 'Volumetric Clouds', type: 'seg', options: ['Off', 'Fast', 'Fancy'], values: [0, 1, 2] },
   { key: 'cloudCoverage', label: 'Cloud Coverage', type: 'range', min: 0, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` },
   { key: 'weather', label: 'Weather', type: 'seg', options: ['Dynamic', 'Clear', 'Rain', 'Storm'], values: ['Dynamic', 'Clear', 'Rain', 'Storm'] },
+  { key: 'difficulty', label: 'Difficulty (Survival)', type: 'seg', options: ['Peaceful', 'Easy', 'Normal', 'Hard'], values: ['Peaceful', 'Easy', 'Normal', 'Hard'] },
   { key: 'volumetric', label: 'God Rays & Mist', type: 'toggle' },
   { key: 'parallax', label: 'Parallax Occlusion (POM)', type: 'toggle' },
   { key: 'ssr', label: 'Water Reflections (SSR)', type: 'toggle' },
@@ -57,18 +62,25 @@ export class UI {
   private loadingEl = document.getElementById('loading')!;
   private modeBadge = document.getElementById('mode-badge')!;
   private waterEl = document.getElementById('vignette-water')!;
+  private hurtEl = document.getElementById('vignette-hurt')!;
+  private statsEl = document.getElementById('stats')!;
   private nameTimer = 0;
   private toastTimer = 0;
+  private statsKey = '';
   current: ScreenName = 'title';
   private settingsReturn: ScreenName = 'title';
+  readonly containers: ContainerScreen;
 
-  constructor(private h: UIHandlers, private settings: GameSettings, private ts: TextureSet) {
+  constructor(private h: UIHandlers, private settings: GameSettings, ts: TextureSet, screenHost: ScreenHost) {
+    setIconTextures(ts);
     this.screens = {
       title: document.getElementById('screen-title')!,
       pause: document.getElementById('screen-pause')!,
       settings: document.getElementById('screen-settings')!,
       inventory: document.getElementById('screen-inventory')!,
+      dead: document.getElementById('screen-dead')!,
     };
+    this.containers = new ContainerScreen(this.screens.inventory, screenHost);
     document.querySelectorAll<HTMLElement>('[data-action]').forEach((el) => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -76,7 +88,6 @@ export class UI {
       });
     });
     this.buildSettings();
-    this.buildInventory();
   }
 
   private action(a: string) {
@@ -92,6 +103,7 @@ export class UI {
       case 'time-sunset': this.h.setTime(0.47); break;
       case 'time-night': this.h.setTime(0.72); break;
       case 'title': this.h.quitToTitle(); break;
+      case 'respawn': this.h.respawn(); break;
     }
   }
 
@@ -116,23 +128,80 @@ export class UI {
     this.modeBadge.textContent = creative ? 'Creative' : 'Survival';
   }
 
-  setHotbar(ids: number[], selected: number) {
-    if (this.hotbarEl.childElementCount !== ids.length) {
+  setHotbar(stacks: (ItemStack | null)[], selected: number) {
+    if (this.hotbarEl.childElementCount !== stacks.length) {
       this.hotbarEl.innerHTML = '';
-      ids.forEach((_, i) => {
+      stacks.forEach((_, i) => {
         const s = document.createElement('div');
         s.className = 'slot';
-        s.innerHTML = `<span class="num">${i + 1}</span><img alt="" />`;
+        s.innerHTML = `<span class="num">${i + 1}</span><img alt="" /><span class="cnt"></span><div class="dur"><i></i></div>`;
         this.hotbarEl.appendChild(s);
       });
     }
-    ids.forEach((id, i) => {
+    stacks.forEach((st, i) => {
       const s = this.hotbarEl.children[i] as HTMLElement;
       s.classList.toggle('selected', i === selected);
       const img = s.querySelector('img')!;
-      const src = blockIcon(id, this.ts);
-      if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+      const src = st ? itemIcon(st.id) : '';
+      if ((img.getAttribute('src') ?? '') !== src) {
+        if (src) img.setAttribute('src', src); else img.removeAttribute('src');
+      }
+      img.style.visibility = st ? 'visible' : 'hidden';
+      const cnt = s.querySelector('.cnt')!;
+      const t = st && st.count > 1 ? String(st.count) : '';
+      if (cnt.textContent !== t) cnt.textContent = t;
+      const dur = s.querySelector('.dur') as HTMLElement;
+      const d = st && ITEMS[st.id];
+      if (d && d.durability > 0 && st!.damage) {
+        const f = Math.max(0, 1 - st!.damage / d.durability);
+        dur.style.display = 'block';
+        const bar = dur.firstElementChild as HTMLElement;
+        bar.style.width = `${Math.round(f * 100)}%`;
+        bar.style.background = `hsl(${Math.round(f * 120)}, 90%, 50%)`;
+      } else dur.style.display = 'none';
     });
+  }
+
+  /** Health, hunger, armor and air above the hotbar (survival only). */
+  setStats(st: PlayerStats, armor: number, visible: boolean) {
+    const air = Math.ceil((st.air / MAX_AIR) * 10 - 0.01);
+    const health = Math.ceil(st.health);
+    const low = health <= 4 ? Math.floor(performance.now() / 120) % 4 : 0;
+    const variant = st.regen > 0 ? 'regen' : '';
+    const key = visible ? `${health}|${st.food}|${armor}|${air}|${low}|${variant}|${st.air < MAX_AIR}` : 'hidden';
+    if (key === this.statsKey) return;
+    this.statsKey = key;
+    this.statsEl.classList.toggle('hidden', !visible);
+    if (!visible) return;
+    const row = (kind: 'heart' | 'food' | 'armor' | 'bubble', value: number, v = '', jitter = false) => {
+      let html = '';
+      for (let i = 0; i < 10; i++) {
+        const fill = value >= (i + 1) * 2 ? 2 : value >= i * 2 + 1 ? 1 : 0;
+        const dy = jitter && (i + low) % 3 === 0 ? -2 : 0;
+        html += `<img alt="" src="${hudIcon(kind, fill, v)}" style="transform:translateY(${dy}px)"/>`;
+      }
+      return html;
+    };
+    const bubbles = () => {
+      let html = '';
+      for (let i = 0; i < 10; i++) if (i < air) html += `<img alt="" src="${hudIcon('bubble', 2)}"/>`;
+      return html;
+    };
+    (this.statsEl.querySelector('.sbar.health') as HTMLElement).innerHTML = row('heart', health, variant, health <= 4);
+    (this.statsEl.querySelector('.sbar.food') as HTMLElement).innerHTML = row('food', st.food);
+    (this.statsEl.querySelector('.sbar.armor') as HTMLElement).innerHTML = armor > 0 ? row('armor', armor) : '';
+    (this.statsEl.querySelector('.sbar.air') as HTMLElement).innerHTML = st.air < MAX_AIR ? bubbles() : '';
+  }
+
+  /** Red flash when hurt, orange glow while burning. */
+  setHurt(hurt: number, burning: boolean) {
+    const o = Math.min(1, hurt * 0.8);
+    this.hurtEl.style.opacity = o > 0.01 ? String(o) : '0';
+    this.hurtEl.classList.toggle('burning', burning);
+  }
+
+  showDeath(message: string) {
+    document.getElementById('death-msg')!.textContent = message;
   }
 
   flashName(name: string) {
@@ -233,21 +302,6 @@ export class UI {
         box.querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', vals[i] === v));
         val.textContent = d.key === 'preset' && v === 'Custom' ? 'Custom' : '';
       }
-    }
-  }
-
-  // ---------------- Inventory ----------------
-
-  private buildInventory() {
-    const grid = document.getElementById('inventory-grid')!;
-    grid.innerHTML = '';
-    for (const b of BLOCKS) {
-      if (!b || !b.inInventory) continue;
-      const item = document.createElement('div');
-      item.className = 'inv-item';
-      item.innerHTML = `<img alt="${b.displayName}" src="${blockIcon(b.id, this.ts)}"/><span class="tip">${b.displayName}</span>`;
-      item.addEventListener('click', () => this.h.pickInventory(b.id));
-      grid.appendChild(item);
     }
   }
 }

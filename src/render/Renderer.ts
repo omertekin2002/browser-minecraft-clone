@@ -1,7 +1,7 @@
 import { GL, Program, RenderTarget, PingPong, FMT, registerInclude, createTexture2D } from './gl/GL';
 import { FrameUniforms, U } from './FrameUniforms';
 import { ChunkMeshes, ChunkGPU } from './ChunkMeshes';
-import { buildTextures, TextureSet } from './textures/BlockTextures';
+import { buildTextures, TextureSet, TexData, layerMips } from './textures/BlockTextures';
 import { lightIlluminance } from './Atmosphere';
 import {
   Mat4, mat4, mul, invert, perspective, viewFromBasis, frustumPlanes, aabbInFrustum, halton, cross, normalize, Vec3, dot,
@@ -50,7 +50,7 @@ import farFrag from './shaders/far.frag?raw';
 import farWaterVert from './shaders/farwater.vert?raw';
 import chunkMaskSrc from './shaders/chunkmask.glsl?raw';
 import { FarTerrain } from './FarTerrain';
-import { EntityRenderer } from './Entities';
+import { EntityRenderer, ItemInstance, TntInstance } from './Entities';
 import entityVert from './shaders/entity.vert?raw';
 import { Rain } from './Rain';
 import rainVert from './shaders/rain.vert?raw';
@@ -128,6 +128,12 @@ export interface EnvState {
   playerSky: number; // 0..1
   heldLight: number; // radius in blocks, 0 = none
   selection: [number, number, number] | null;
+  /** Selection box within the selected block (x0 y0 z0 x1 y1 z1 in block units). */
+  selectionBox?: number[];
+  /** Dropped items to draw. */
+  items?: ItemInstance[];
+  /** Lit TNT to draw. */
+  tnt?: TntInstance[];
   breakBlock: [number, number, number, number] | null; // x,y,z,stage
   /** View-space model matrix of the held block (null = hidden). */
   heldModel: Mat4 | null;
@@ -320,7 +326,7 @@ export class Renderer {
     this.normalArray = this.createArray(ts.normal, gl.RGBA8, ts.count, ts.levels);
     this.specularArray = this.createArray(ts.specular, gl.RGBA8, ts.count, ts.levels);
     this.computeFarColors();
-    this.entities = new EntityRenderer(gl, ts.cutout);
+    this.entities = new EntityRenderer(gl, ts);
 
     // Atmosphere LUTs
     const lutOpts = { ...FMT.rgba16f(gl), min: gl.LINEAR, mag: gl.LINEAR };
@@ -376,6 +382,22 @@ export class Renderer {
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.REPEAT);
     if (this.aniso) gl.texParameterf(gl.TEXTURE_2D_ARRAY, this.aniso.TEXTURE_MAX_ANISOTROPY_EXT, 8);
     return t;
+  }
+
+  /** Re-uploads one texture layer (all mips) after its TexData changed (animated items). */
+  updateTextureLayer(name: string, t: TexData) {
+    const gl = this.gl;
+    const layer = TEXTURE_NAMES.indexOf(name as (typeof TEXTURE_NAMES)[number]);
+    if (layer < 0) return;
+    const mips = layerMips(t);
+    const targets: Array<[WebGLTexture, Uint8Array[]]> = [
+      [this.albedoArray, mips.albedo], [this.normalArray, mips.normal], [this.specularArray, mips.specular],
+    ];
+    for (const [tex, data] of targets) {
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
+      data.forEach((d, l) => gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, l, 0, 0, layer, 16 >> l, 16 >> l, 1, gl.RGBA, gl.UNSIGNED_BYTE, d));
+    }
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
   }
 
   private fullscreen() {
@@ -739,7 +761,7 @@ export class Renderer {
         .i('uDestroyBase', DESTROY_LAYER_BASE)
         .f('uPomDepth', 0)
         .i('uBreakStage', -1);
-      this.entities.draw(E, cam, right, up, env.heldModel, env.playerLight[0], env.playerLight[1]);
+      this.entities.draw(E, cam, right, up, env.heldModel, env.playerLight[0], env.playerLight[1], env.items ?? [], env.tnt ?? []);
       gl.enable(gl.CULL_FACE);
     }
     this.stats.quads = quads;
@@ -942,12 +964,13 @@ export class Renderer {
     // ---- selection outline ----
     if (env.selection) {
       const [bx, by, bz] = env.selection;
+      const sb = env.selectionBox ?? [0, 0, 0, 1, 1, 1];
       const e = 0.002;
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       this.pOutline.use()
-        .v3('uBoxMin', bx - cam.x - e, by - cam.y - e, bz - cam.z - e)
-        .v3('uBoxMax', bx + 1 - cam.x + e, by + 1 - cam.y + e, bz + 1 - cam.z + e)
+        .v3('uBoxMin', bx + sb[0] - cam.x - e, by + sb[1] - cam.y - e, bz + sb[2] - cam.z - e)
+        .v3('uBoxMax', bx + sb[3] - cam.x + e, by + sb[4] - cam.y + e, bz + sb[5] - cam.z + e)
         .v2('uViewport', this.canvasW, this.canvasH)
         .f('uThickness', Math.max(1.5, this.canvasH / 700))
         .tex('uDepth', 0, this.gbuffer.depth);

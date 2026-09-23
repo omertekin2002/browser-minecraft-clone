@@ -7,6 +7,7 @@ export interface GameSettings extends RenderSettings {
   dayLength: number; // minutes per full day
   volume: number;
   weather: string; // Dynamic | Clear | Rain | Storm
+  difficulty: string; // Peaceful | Easy | Normal | Hard
 }
 
 export const PRESETS: Record<string, Partial<GameSettings>> = {
@@ -25,6 +26,7 @@ export const DEFAULT_GAME_SETTINGS: GameSettings = {
   dayLength: 20,
   volume: 0.6,
   weather: 'Dynamic',
+  difficulty: 'Normal',
 };
 
 const KEY = 'voxelcraft:settings:v1';

@@ -14,14 +14,21 @@
 
     <div id="hud" class="hidden">
       <div id="crosshair"></div>
-      <div id="blockname"></div>
-      <div id="hotbar"></div>
+      <div id="hud-bottom">
+        <div id="blockname"></div>
+        <div id="stats" class="hidden">
+          <div class="stats-row"><div class="sbar armor"></div><div class="sbar air"></div></div>
+          <div class="stats-row"><div class="sbar health"></div><div class="sbar food"></div></div>
+        </div>
+        <div id="hotbar"></div>
+      </div>
       <div id="mode-badge"></div>
       <pre id="debug" class="hidden"></pre>
       <div id="toast"></div>
     </div>
 
     <div id="vignette-water"></div>
+    <div id="vignette-hurt"></div>
 
     <div id="loading" class="hidden">
       <div class="loading-inner">
@@ -47,9 +54,10 @@
           <div class="controls-help">
             <div><kbd>WASD</kbd> move</div><div><kbd>Space</kbd> jump · double-tap to fly</div>
             <div><kbd>Shift</kbd> sneak / descend</div><div><kbd>Ctrl</kbd> sprint</div>
-            <div><kbd>LMB</kbd> break</div><div><kbd>RMB</kbd> place</div>
+            <div><kbd>LMB</kbd> break</div><div><kbd>RMB</kbd> place · use · eat</div>
             <div><kbd>MMB</kbd> pick block</div><div><kbd>1-9</kbd> / wheel hotbar</div>
-            <div><kbd>E</kbd> inventory</div><div><kbd>[</kbd> <kbd>]</kbd> time of day</div>
+            <div><kbd>E</kbd> inventory &amp; crafting</div><div><kbd>Q</kbd> drop item</div>
+            <div><kbd>[</kbd> <kbd>]</kbd> time of day</div><div><kbd>Esc</kbd> pause · game mode</div>
             <div><kbd>F3</kbd> debug</div><div><kbd>F1</kbd> hide HUD · <kbd>F2</kbd> screenshot</div>
           </div>
           <div class="footer">Seed <span id="seed-label"></span> · Everything you see is generated procedurally in your browser</div>
@@ -80,11 +88,16 @@
         </div>
       </section>
 
-      <section id="screen-inventory" class="screen hidden">
-        <div class="panel wide">
-          <h2>Creative Inventory</h2>
-          <p class="hint">Click a block to put it in the selected hotbar slot. Press <kbd>E</kbd> to close.</p>
-          <div id="inventory-grid"></div>
+      <section id="screen-inventory" class="screen hidden"></section>
+
+      <section id="screen-dead" class="screen hidden">
+        <div class="death-wrap">
+          <h1 class="death-title">You Died!</h1>
+          <div class="death-msg" id="death-msg"></div>
+          <div class="menu">
+            <button class="btn primary" data-action="respawn">Respawn</button>
+            <button class="btn" data-action="title">Title Screen</button>
+          </div>
         </div>
       </section>
     </div>

@@ -80,6 +80,8 @@ const ORES: Array<[number, number, number, number, number]> = [
   [B.CLAY, 1, 30, 62, 12],
 ];
 
+const STONE_VARIANTS = [B.GRANITE, B.DIORITE, B.ANDESITE];
+
 export class TerrainGenerator {
   readonly seed: number;
   private nCont: SimplexNoise;
@@ -611,6 +613,68 @@ export class TerrainGenerator {
         const i = (y << 8) | (z << 4) | x;
         if (blocks[i] === B.STONE) blocks[i] = B.EMERALD_ORE;
       }
+    }
+
+    // Granite, diorite and andesite blobs. Seeded per chunk (with their own RNG, so ore placement
+    // is unchanged) and written into neighbours too, so blobs are never cut at chunk borders.
+    for (let nz = cz - 1; nz <= cz + 1; nz++) {
+      for (let nx = cx - 1; nx <= cx + 1; nx++) {
+        const vrng = mulberry32(hash2(nx, nz, this.seed + 9191));
+        for (const kind of STONE_VARIANTS) {
+          if (vrng() > 0.55) continue;
+          const bx = nx * 16 + vrng() * 16 - x0, by = 8 + vrng() * 80, bz = nz * 16 + vrng() * 16 - z0;
+          const rx = 2 + vrng() * 2.2, ry = 1.6 + vrng() * 1.6, rz = 2 + vrng() * 2.2;
+          const lx0 = Math.max(0, Math.floor(bx - rx)), lx1 = Math.min(15, Math.ceil(bx + rx));
+          const lz0 = Math.max(0, Math.floor(bz - rz)), lz1 = Math.min(15, Math.ceil(bz + rz));
+          for (let y = Math.max(1, Math.floor(by - ry)); y <= Math.min(254, Math.ceil(by + ry)); y++) {
+            for (let lz = lz0; lz <= lz1; lz++) {
+              for (let lx = lx0; lx <= lx1; lx++) {
+                const dx = (lx + 0.5 - bx) / rx, dy = (y + 0.5 - by) / ry, dz = (lz + 0.5 - bz) / rz;
+                if (dx * dx + dy * dy + dz * dz > 1) continue;
+                const i = (y << 8) | (lz << 4) | lx;
+                if (blocks[i] === B.STONE) blocks[i] = kind;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Cobwebs clinging to some cave ceilings.
+    const wrng = mulberry32(hash2(cx, cz, this.seed + 7171));
+    if (wrng() < 0.14) {
+      for (let tries = 0; tries < 40; tries++) {
+        const x = 2 + Math.floor(wrng() * 12), y = 12 + Math.floor(wrng() * 40), z = 2 + Math.floor(wrng() * 12);
+        const i = (y << 8) | (z << 4) | x;
+        if (blocks[i] !== B.AIR || blocks[((y + 1) << 8) | (z << 4) | x] !== B.STONE) continue;
+        const n = 3 + Math.floor(wrng() * 6);
+        for (let k = 0; k < n; k++) {
+          const wx = x + Math.floor(wrng() * 3) - 1, wy = y - Math.floor(wrng() * 2), wz = z + Math.floor(wrng() * 3) - 1;
+          const j = (wy << 8) | (wz << 4) | wx;
+          if (blocks[j] === B.AIR) blocks[j] = B.COBWEB;
+        }
+        break;
+      }
+    }
+
+    // Fossils: a bone-block spine with ribs, buried under deserts.
+    const frng = mulberry32(hash2(cx, cz, this.seed + 6161));
+    if (biomes[136] === Biome.DESERT && frng() < 0.05) {
+      const y = 22 + Math.floor(frng() * 18), z = 7, len = 6 + Math.floor(frng() * 4), sx = 8 - (len >> 1);
+      const put = (x: number, yy: number, zz: number) => {
+        const i = (yy << 8) | (zz << 4) | x;
+        if (blocks[i] !== B.AIR && blocks[i] !== B.WATER && blocks[i] !== B.LAVA) blocks[i] = B.BONE_BLOCK;
+      };
+      for (let k = 0; k < len; k++) {
+        put(sx + k, y, z);
+        if (k % 2 === 1 && k < len - 1) {
+          for (const side of [-1, 1]) {
+            put(sx + k, y, z + side); put(sx + k, y, z + side * 2);
+            put(sx + k, y - 1, z + side * 3); put(sx + k, y - 2, z + side * 3);
+          }
+        }
+      }
+      put(sx + len, y + 1, z); put(sx + len + 1, y + 1, z);
     }
 
     // --- 4. trees (including those rooted in neighbouring chunks) ---

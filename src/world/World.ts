@@ -24,7 +24,11 @@ export interface WorldCallbacks {
   onMesh(col: ChunkColumn, data: MeshData): void;
   onUnload(col: ChunkColumn): void;
   onModified?(col: ChunkColumn): void;
+  /** A block broke by itself (lost its support); the game may drop it as an item. */
+  onRemoved?(x: number, y: number, z: number, id: number): void;
 }
+
+const SIDES: Array<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 
 const NEIGHBOR_OFFSETS: Array<[number, number]> = [
   [-1, -1], [0, -1], [1, -1], [-1, 0], [0, 0], [1, 0], [-1, 1], [0, 1], [1, 1],
@@ -115,8 +119,10 @@ export class World {
     const above = this.getBlock(x, y + 1, z);
     if (above > 0) {
       const def = B.BLOCKS[above];
-      if (def.needsSupport && (here === B.AIR || B.BLOCKS[here]?.liquid)) {
+      const supported = here > 0 && !B.BLOCKS[here].liquid && (B.IS_SOLID[here] || here === above || B.BLOCKS[here].shape === B.Shape.CACTUS);
+      if (def.needsSupport && !supported && !(B.isCrop(above) && here === B.FARMLAND)) {
         this.setBlock(x, y + 1, z, B.AIR, true);
+        this.cb.onRemoved?.(x, y + 1, z, above);
       } else if (def.gravity && here === B.AIR) {
         let ty = y;
         while (ty > 0 && this.getBlock(x, ty - 1, z) === B.AIR) ty--;
@@ -133,6 +139,16 @@ export class World {
         while (ty > 0 && (this.getBlock(x, ty - 1, z) === B.AIR || this.getBlock(x, ty - 1, z) === B.WATER)) ty--;
         this.setBlock(x, y, z, B.AIR, false);
         this.setBlock(x, ty, z, here, false);
+        this.harden(x, ty, z);
+      }
+    }
+    this.harden(x, y, z);
+    // Water meeting lava turns the lava into obsidian.
+    if (here === B.WATER || here === B.LAVA) {
+      for (const [dx, dy, dz] of SIDES) {
+        const n = this.getBlock(x + dx, y + dy, z + dz);
+        if (here === B.WATER && n === B.LAVA) this.setBlock(x + dx, y + dy, z + dz, B.OBSIDIAN, false);
+        else if (here === B.LAVA && n === B.WATER) { this.setBlock(x, y, z, B.OBSIDIAN, false); break; }
       }
     }
     // Water flows into freshly opened space (bounded spread, no levels).
@@ -144,6 +160,20 @@ export class World {
     }
   }
 
+  /** Concrete powder next to water becomes concrete (checks the block and its neighbours). */
+  private harden(x: number, y: number, z: number) {
+    const check = (px: number, py: number, pz: number) => {
+      const b = this.getBlock(px, py, pz);
+      if (b <= 0 || !B.POWDER_TO_CONCRETE[b]) return;
+      for (const [dx, dy, dz] of SIDES) {
+        if (this.getBlock(px + dx, py + dy, pz + dz) === B.WATER) { this.setBlock(px, py, pz, B.POWDER_TO_CONCRETE[b], false); return; }
+      }
+    };
+    const here = this.getBlock(x, y, z);
+    if (here === B.WATER) for (const [dx, dy, dz] of SIDES) check(x + dx, y + dy, z + dz);
+    else check(x, y, z);
+  }
+
   private flood(x: number, y: number, z: number) {
     const queue: Array<[number, number, number, number]> = [[x, y, z, 0]];
     let placed = 0;
@@ -151,6 +181,7 @@ export class World {
       const [qx, qy, qz, dist] = queue.shift()!;
       if (this.getBlock(qx, qy, qz) !== B.AIR) continue;
       this.setBlock(qx, qy, qz, B.WATER, false);
+      this.harden(qx, qy, qz);
       placed++;
       if (this.getBlock(qx, qy - 1, qz) === B.AIR) {
         queue.push([qx, qy - 1, qz, dist]);

@@ -13,6 +13,9 @@ uniform vec3 uCameraFract;   // camera - floor(camera)
 uniform int uBreakStage;     // -1 = none
 uniform int uDestroyBase;
 uniform float uPomDepth;   // 0 disables parallax occlusion mapping
+#if defined(ENTITY)
+uniform float uFlash;      // blend toward white (primed TNT)
+#endif
 
 in vec2 vUV;
 flat in int vLayer;
@@ -76,6 +79,9 @@ void main() {
   float tintMask = albedo.a;
 #endif
   albedo.rgb *= mix(vec3(1.0), vTint, tintMask);
+#if defined(ENTITY)
+  albedo.rgb = mix(albedo.rgb, vec3(1.0), uFlash);
+#endif
 
   vec3 nts = texture(uNormalTex, tc).xyz * 2.0 - 1.0;
   vec3 N = normalize(vTangent * nts.x + vBitangent * nts.y + vNormal * nts.z);
